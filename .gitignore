@@ -1,0 +1,13 @@
+# Virtual environment
+.venv/
+
+# Python-generated files
+__pycache__/
+*.pyc
+
+# Streamlit secrets and environment variables
+.streamlit/secrets.toml
+.env
+
+# VS Code settings
+.vscode/
