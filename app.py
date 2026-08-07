@@ -1,54 +1,8 @@
-# import pandas as pd # import numpy as np
-# import streamlit as st # import plotly.express as px
-
-# # Configure the web page
-# st.set_page_config(
-#     page_title="Youtube Comment Analysis",
-#     page_icon=":bar_chart:",
-#     layout="wide"
-# )
-
-# # Load the dataset
-# @st.cache_data # Cache the data to improve performance
-# def load_data():
-#     return pd.read_csv("data/youtube_comments_labels.csv")
-
-# dataset = load_data()
-
-# # Application heading
-# st.title("Youtube Comment Analysis") # title
-
-# st.write(
-#     "This application uses natural language processing and machine "
-#     "learning to analyse YouTube comments"
-# )
-
-# # Show basic dataset information
-# st.subheader("Dataset Overview") # subheader
-
-# column1, column2 = st.columns(2) 
-
-# with column1:
-#     st.metric("Number of comments", len(dataset))
-
-# with column2:
-#     st.metric("Number of columns", len(dataset.columns))
-
-# # Display the dataset
-# st.subheader("Comment data")
-# st.dataframe(dataset.head(20), use_container_width=True) # Display the first 20 rows of the dataset
-
-# # Show the missing values
-# st.subheader("Missing Values") # subheader
-# st.dataframe(
-#     dataset.isnull().sum().reset_index(
-#         name="Missing Values"
-#     ),
-#     use_container_width=True
-# )
-
-import pandas as pd
-import streamlit as st
+import pandas as pd # Pandas is a Python library used for data manipulation and analysis. It provides data structures like DataFrames that make it easy to work with structured data.
+import streamlit as st # Streamlit is a Python library that allows you to create interactive web applications for data science and machine learning projects. It provides an easy way to build user interfaces and visualize data.
+import re # The re module in Python provides support for regular expressions, which are used for pattern matching and text manipulation. It allows you to search, match, and manipulate strings based on specific patterns.
+from sklearn.feature_extraction.text import TfidfVectorizer # TfidfVectorizer is a class from the scikit-learn library that converts a collection of raw text documents into a matrix of TF-IDF features. It is commonly used in natural language processing tasks to represent text data numerically for machine learning models.
+from sklearn.model_selection import train_test_split # train_test_split is a function from the scikit-learn library that splits a dataset into training and testing subsets. It is commonly used in machine learning to evaluate model performance by training on one subset and testing on another.
 
 # Configure the Streamlit browser page
 st.set_page_config(
@@ -125,9 +79,83 @@ def load_and_clean_data():
 
     return original_data, cleaned_data
 
+def preprocess_text(comment):
+    """
+    Prepares a comment for machine-learning analysis. The original comment is kept in the dataset so it can still be displayed to the user. This function creates a separate cleaned version specifically for TF-IDF and classification.
+    """
+    # Convert the comment to lowercase so words such as "Excellent" and "excellent" are treated as the same word
+    comment = comment.lower()
+
+    # Remove website links because URLs usually don't help the model understand the sentiment of a comment
+    comment = re.sub(r"http\S+|www\.\S+", "", comment)
+
+    # Remove the @ symbol from usernames so that "@username" becomes "username"
+    comment = re.sub(r"@", "", comment)
+
+    # Remove characters that are not letters, numbers, or spaces
+    comment = re.sub(r"[^a-z0-9\s]", "", comment)
+
+    # Replace repeated spaces with one space
+    comment = re.sub(r"\s+", " ", comment)
+
+    # Remove spaces from the beginning and end
+    return comment.strip()
 
 # Run the function and store both versions of the dataset
 original_data, cleaned_data = load_and_clean_data()
+
+# Apply the NLP preprocessing function to every comment
+# The result is stored in a new column so the originalk text is preserved
+cleaned_data["Processed Comments"] = cleaned_data["Comments"].apply(
+    preprocess_text
+)
+
+# Remove any rows that became empty after NLP preprocessing
+cleaned_data = cleaned_data[
+    cleaned_data["Processed Comments"] != ""
+].reset_index(drop=True)
+
+# X contains the input text that the model will analyse
+X = cleaned_data["Processed Comments"]
+
+# y contains the correct sentiment labels that the model will learn to predict
+y = cleaned_data["Sentiment"]
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+
+    # Use 80% of the comments for training and 20% for testing
+    test_size=0.20,
+
+    # Keep the proportion of positive, neutral and negative comments similar in both sets
+    stratify=y,
+
+    # Use a fixed value so the split is reproducible
+    random_state=42
+)
+
+# The TF-IDF vectoriser converts the text into a numerical representation that the machine learning model can understand. It calculates the importance of each word in a comment relative to the entire dataset.
+tfidf_vectorizer = TfidfVectorizer(
+    # Ignore common English words such as "the" and "and"
+    stop_words="english",
+
+    # Include individual words and pairs of consecutive words. For example: "good" and "very good"
+    ngram_range=(1, 2),
+
+    # Ignore words that appear in fewer that two comments
+    min_df=2,
+
+    # Limit the number of features to keep the baseline manageable
+    max_features=5000
+)
+
+# Learn the vocabulary from the training comments and transform them
+X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
+
+# Transform the test comments using the vocabulary learned from training data. We use transform(), not fit_transform(), to avoid  data leakage
+X_test_tfidf = tfidf_vectorizer.transform(X_test)
 
 
 # Main page heading
@@ -189,3 +217,46 @@ st.dataframe(
     label_counts,
     use_container_width=True
 )
+
+# Display information about the NLP and TF-IDF stage
+st.subheader("NLP and TF-IDF summary")
+
+nlp_column1, nlp_column2, nlp_column3 = st.columns(3)
+
+with nlp_column1:
+    st.metric(
+        label="Training comments",
+        value=len(X_train)
+    )
+
+with nlp_column2:
+    st.metric(
+        label="Testing comments",
+        value=len(X_test)
+    )
+
+with nlp_column3:
+    st.metric(
+        label="TF-IDF features",
+        value=X_train_tfidf.shape[1]
+    )
+
+
+# Show examples of original and processed comments
+st.subheader("NLP preprocessing examples")
+
+st.dataframe(
+    cleaned_data[
+        ["Comments", "Processed Comments", "Sentiment"]
+    ].head(10),
+    use_container_width=True
+)
+
+
+# Retrieve the words and word pairs learned by TF-IDF
+feature_names = tfidf_vectorizer.get_feature_names_out()
+
+st.subheader("Example TF-IDF features")
+
+# Display only the first 50 features to avoid filling the page
+st.write(feature_names[:50])
