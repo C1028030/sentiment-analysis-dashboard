@@ -3,6 +3,15 @@ import streamlit as st # Streamlit is a Python library that allows you to create
 import re # The re module in Python provides support for regular expressions, which are used for pattern matching and text manipulation. It allows you to search, match, and manipulate strings based on specific patterns.
 from sklearn.feature_extraction.text import TfidfVectorizer # TfidfVectorizer is a class from the scikit-learn library that converts a collection of raw text documents into a matrix of TF-IDF features. It is commonly used in natural language processing tasks to represent text data numerically for machine learning models.
 from sklearn.model_selection import train_test_split # train_test_split is a function from the scikit-learn library that splits a dataset into training and testing subsets. It is commonly used in machine learning to evaluate model performance by training on one subset and testing on another.
+from sklearn.linear_model import LogisticRegression # Logistic Regression will learn to classify comments by sentiment
+from sklearn.metrics import ( # These tools measure how well the classifier performs
+    accuracy_score,
+    classification_report,
+    confusion_matrix
+)
+# These libraries will display the confusion matrix as a chart
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Configure the Streamlit browser page
 st.set_page_config(
@@ -157,6 +166,57 @@ X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
 # Transform the test comments using the vocabulary learned from training data. We use transform(), not fit_transform(), to avoid  data leakage
 X_test_tfidf = tfidf_vectorizer.transform(X_test)
 
+# Create the logistic regression classification model
+logistic_model = LogisticRegression(
+    # Allow the traning process enough attempts to find a solution
+    max_iter=1000,
+
+    # Use a fixed value to make the model's rresults reproducible
+    random_state=42
+)
+
+# Train the model using the TF-IDF features and correct sentiment labels
+# During training, the model learns relationships between words and sentiments
+logistic_model.fit(X_train_tfidf, y_train)
+
+# Ask the trained model to predict the sentiments of the unseen test comments
+y_predictions = logistic_model.predict(X_test_tfidf)
+
+# Calculate the percentage of test comments classified correctly
+model_accuracy = accuracy_score(
+    y_test,
+    y_predictions
+)
+
+# Create detailed performance measurements for each sentiment
+classification_results = classification_report(
+    y_test,
+    y_predictions,
+
+    # Return the results as a dictionary so Pandas can display them
+    output_dict=True,
+
+    # Prevent warnings if the model predicts none of a particular sentiment class
+    zero_division=0
+)
+
+# Convert the classification results into a readable dataframe
+classification_results_df = pd.DataFrame(
+    classification_results
+).transpose()
+
+# Set a consistent order for the sentiment classes
+sentiment_labels = ["negative", "neutral", "positive"]
+
+# Create a confusion matrix comparing the real and predicted labels
+confusion_matrix_results = confusion_matrix(
+    y_test,
+    y_predictions,
+    labels=sentiment_labels
+)
+
+
+# --- STREAMLIT USER INTERFACE ---
 
 # Main page heading
 st.title("YouTube Comment Analysis Dashboard")
@@ -260,3 +320,80 @@ st.subheader("Example TF-IDF features")
 
 # Display only the first 50 features to avoid filling the page
 st.write(feature_names[:50])
+
+# Display the Logistic Regression evaluation section
+st.subheader("Logistic Regression classification")
+
+# Convert accuracy from a decimal into a percentage
+st.metric(
+    label="Model accuracy",
+    value=f"{model_accuracy:.2%}"
+)
+
+st.write(
+    "Accuracy represents the percentage of unseen test comments"
+    "that the model classified correctly."
+)
+
+# Display precision, recall and F1-score for each sentiment class
+st.subheader("Classification report")
+
+st.dataframe(
+    classification_results_df.round(3),
+    use_container_width=True
+)
+
+# Matplot figure for the confusion matrix
+figure, axis = plt.subplots(figsize=(7, 5))
+
+# Display the confusion matrix as a coloured heatmap
+sns.heatmap(
+    confusion_matrix_results,
+
+    # Write the number from each cell onto the chart
+    annot=True,
+
+    # Display whole numbers instead of decimal values
+    fmt="d",
+
+    # Use a blue colour scheme
+    cmap="Blues",
+
+    # Add the sentiment names to both axes
+    xticklabels=sentiment_labels,
+    yticklabels=sentiment_labels,
+
+    # Draw the chart on the axis created above
+    ax=axis
+)
+
+# Explain what each axis represents
+axis.set_xlabel("Predicted sentiment")
+axis.set_ylabel("Actual sentiment")
+axis.set_title("Logistic Regression confusion matrix")
+
+# Display the completed chart in Streamlit
+st.pyplot(figure)
+
+# Close the figure after displaying it to avoid unnecessary memory use
+plt.close(figure)
+
+# Create a table containing test comments and the model's predictions
+prediction_examples = pd.DataFrame({
+    "Processed comment": X_test,
+    "Actual sentiment": y_test,
+    "Predicted sentiment": y_predictions
+})
+
+# Add a column showing whether each prediction was correct
+prediction_examples["Correct prediction"] = (
+    prediction_examples["Actual sentiment"]
+    == prediction_examples["Predicted sentiment"]
+)
+
+st.subheader("Example model predictions")
+
+st.dataframe(
+    prediction_examples.head(20),
+    use_container_width=True
+)
