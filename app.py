@@ -4,6 +4,7 @@ import re # The re module in Python provides support for regular expressions, wh
 from sklearn.feature_extraction.text import TfidfVectorizer # TfidfVectorizer is a class from the scikit-learn library that converts a collection of raw text documents into a matrix of TF-IDF features. It is commonly used in natural language processing tasks to represent text data numerically for machine learning models.
 from sklearn.model_selection import train_test_split # train_test_split is a function from the scikit-learn library that splits a dataset into training and testing subsets. It is commonly used in machine learning to evaluate model performance by training on one subset and testing on another.
 from sklearn.linear_model import LogisticRegression # Logistic Regression will learn to classify comments by sentiment
+from sklearn.svm import LinearSVC # LinearSVC creates a Linear Support Vector Machine classifier
 from sklearn.metrics import ( # These tools measure how well the classifier performs
     accuracy_score,
     classification_report,
@@ -180,18 +181,18 @@ logistic_model = LogisticRegression(
 logistic_model.fit(X_train_tfidf, y_train)
 
 # Ask the trained model to predict the sentiments of the unseen test comments
-y_predictions = logistic_model.predict(X_test_tfidf)
+logistic_predictions = logistic_model.predict(X_test_tfidf)
 
 # Calculate the percentage of test comments classified correctly
-model_accuracy = accuracy_score(
+logistic_accuracy = accuracy_score(
     y_test,
-    y_predictions
+    logistic_predictions
 )
 
 # Create detailed performance measurements for each sentiment
-classification_results = classification_report(
+logistic_classification_results = classification_report(
     y_test,
-    y_predictions,
+    logistic_predictions,
 
     # Return the results as a dictionary so Pandas can display them
     output_dict=True,
@@ -201,17 +202,69 @@ classification_results = classification_report(
 )
 
 # Convert the classification results into a readable dataframe
-classification_results_df = pd.DataFrame(
-    classification_results
+logistic_results_df = pd.DataFrame(
+    logistic_classification_results
 ).transpose()
 
 # Set a consistent order for the sentiment classes
 sentiment_labels = ["negative", "neutral", "positive"]
 
 # Create a confusion matrix comparing the real and predicted labels
-confusion_matrix_results = confusion_matrix(
+logistic_confusion_matrix = confusion_matrix(
     y_test,
-    y_predictions,
+    logistic_predictions,
+    labels=sentiment_labels
+)
+
+# --- LINEAR SVM CLASSIFICATION ---
+
+# Create the linear support vector machine model
+linear_svm_model = LinearSVC(
+    # Use a fixed value so teh results are reproducible
+    random_state=42,
+
+    # Allow enough iterations for the model to complete its training
+    max_iter=5000
+)
+
+# Train Linear SVM using exactly the same training data used by Logistic Regression
+linear_svm_model.fit(
+    X_train_tfidf,
+    y_train
+)
+
+# Predict the sentiment of the same unseen test comments
+svm_predictions = linear_svm_model.predict(
+    X_test_tfidf
+)
+
+# Calculate the percentage of correct SVM predictions
+svm_accuracy = accuracy_score(
+    y_test,
+    svm_predictions
+)
+
+# Calculate precision, recall and F1-Score for Linear SVM
+svm_classification_results = classification_report(
+    y_test,
+    svm_predictions,
+
+    # Return the measurements in a dictionary
+    output_dict=True,
+
+    # Avoid warnings if a sentiment receives no predictions
+    zero_division=0
+)
+
+# Convert the Linear SVM results into a readable dataframe
+svm_results_df = pd.DataFrame(
+    svm_classification_results
+).transpose()
+
+# Create a confusion matrix ffor Linear SVM
+svm_confusion_matrix = confusion_matrix(
+    y_test,
+    svm_predictions,
     labels=sentiment_labels
 )
 
@@ -327,7 +380,7 @@ st.subheader("Logistic Regression classification")
 # Convert accuracy from a decimal into a percentage
 st.metric(
     label="Model accuracy",
-    value=f"{model_accuracy:.2%}"
+    value=f"{logistic_accuracy:.2%}"
 )
 
 st.write(
@@ -339,7 +392,7 @@ st.write(
 st.subheader("Classification report")
 
 st.dataframe(
-    classification_results_df.round(3),
+    logistic_results_df.round(3),
     use_container_width=True
 )
 
@@ -348,7 +401,7 @@ figure, axis = plt.subplots(figsize=(7, 5))
 
 # Display the confusion matrix as a coloured heatmap
 sns.heatmap(
-    confusion_matrix_results,
+    logistic_confusion_matrix,
 
     # Write the number from each cell onto the chart
     annot=True,
@@ -382,7 +435,7 @@ plt.close(figure)
 prediction_examples = pd.DataFrame({
     "Processed comment": X_test,
     "Actual sentiment": y_test,
-    "Predicted sentiment": y_predictions
+    "Predicted sentiment": logistic_predictions
 })
 
 # Add a column showing whether each prediction was correct
@@ -396,4 +449,112 @@ st.subheader("Example model predictions")
 st.dataframe(
     prediction_examples.head(20),
     use_container_width=True
+)
+
+# --- LINEAR SVM RESULTS ---
+
+st.subheader("Linear SVM classification")
+
+# Display the overall Linear SVM accuracy
+st.metric(
+    label="Linear SVM accuracy",
+    value=f"{svm_accuracy:.2%}"
+)
+
+st.write(
+    "Linear SVM was trained and tested using the same data as "
+    "Logistic Regression, allowing the models to be compared fairly."
+)
+
+# Display precision, recall and F1-score
+st.subheader("Linear SVM classification report")
+
+st.dataframe(
+    svm_results_df.round(3),
+    use_container_width=True
+)
+
+# Create a figure for the Linear SVM confusion matrix
+svm_figure, svm_axis = plt.subplots(figsize=(7, 5))
+
+# Display the confusion matrix as a heatmap
+sns.heatmap(
+    svm_confusion_matrix,
+
+    # Display the number of predictions in each cell
+    annot=True,
+
+    # Use whole numbers
+    fmt="d",
+
+    # Use a green colour scheme to distinguish it from the Logistic Regression Chart
+    cmap="Greens",
+
+    # Display the sentiment labels on both axes
+    xticklabels=sentiment_labels,
+    yticklabels=sentiment_labels,
+
+    # Draw the heatmap on the axis created above
+    ax=svm_axis
+)
+
+# Label the chart
+svm_axis.set_xlabel("Predicted sentiment")
+svm_axis.set_ylabel("Actual sentiment")
+svm_axis.set_title("Linear SVM confusion matrix")
+
+# Display the chart in Streamlit
+st.pyplot(svm_figure)
+
+# Close the figure after displaying it
+plt.close(svm_figure)
+
+# ---  MODEL COMPARISON ---
+st.subheader("Classifier comparison")
+
+# Extract the macro-average F1-score from each classification report
+# Macro averaging gives every sentiment class equal importance
+logistic_macro_f1 = logistic_classification_results[
+    "macro avg"
+]["f1-score"]
+
+svm_macro_f1 = svm_classification_results[
+    "macro avg"
+]["f1-score"]
+
+# Create a comparison table
+model_comparison = pd.DataFrame({
+    "Model": [
+        "Logistic Regression",
+        "Linear SVM"
+    ],
+    "Accuracy": [
+        logistic_accuracy,
+        svm_accuracy
+    ],
+    "Macro F1-score": [
+        logistic_macro_f1,
+        svm_macro_f1
+    ]
+})
+
+# Display the scores as percentages
+st.dataframe(
+    model_comparison.style.format({
+        "Accuracy": "{:.2%}",
+        "Macro F1-score": "{:.2%}"
+    }),
+    use_container_width=True
+)
+
+# Identify which model achieved the higher accuracy
+if svm_accuracy > logistic_accuracy:
+    best_model = "Linear SVM"
+elif logistic_accuracy > svm_accuracy:
+    best_model = "Logistic Regression"
+else:
+    best_model = "Both models achieved the same accuracy"
+
+st.write(
+    f"**Highest accuracy:** {best_model}"
 )
