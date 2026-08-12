@@ -13,6 +13,7 @@ from sklearn.metrics import ( # These tools measure how well the classifier perf
 # These libraries will display the confusion matrix as a chart
 import matplotlib.pyplot as plt
 import seaborn as sns
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer # VADER provides rule-based sentiment analysis without model training
 
 # Configure the Streamlit browser page
 st.set_page_config(
@@ -110,6 +111,23 @@ def preprocess_text(comment):
 
     # Remove spaces from the beginning and end
     return comment.strip()
+
+def convert_vader_score_to_label(compound_score):
+    """
+    Converts VADER's numerical compound score into one of the three sentiment labels used in the dataset
+    """
+
+    # Scores of 0.05 or higher are treated as positive
+    if compound_score >= 0.05:
+        return "positive"
+
+    # Scores of -0.05 or lower are treated as negative
+    elif compound_score <= -0.05:
+        return "negative"
+
+    # Scores between -0.05 and 0.05 are treated as neutral
+    else:
+        return "neutral"
 
 # Run the function and store both versions of the dataset
 original_data, cleaned_data = load_and_clean_data()
@@ -268,6 +286,59 @@ svm_confusion_matrix = confusion_matrix(
     labels=sentiment_labels
 )
 
+
+# -- VADER SENTIMENT ANALYSIS ---
+
+# Create the VADER sentiment analyser
+vader_analyzer = SentimentIntensityAnalyzer()
+
+# Retrieve the original versions of the comments in the test set
+# We use the indexes from X_test so VADER is evaluated on exactly the same comments as Logistic Regression and Linear SVM
+vader_test_comments = cleaned_data.loc[
+    X_test.index,
+    "Comments"
+]
+
+vader_scores = vader_test_comments.apply(
+    vader_analyzer.polarity_scores
+)
+
+# Extract the compound score from each VADER result
+# The compound score summarises the overall sentiment from -1 to 1
+vader_compound_scores = vader_scores.apply(
+    lambda score: score["compound"]
+)
+
+# Convert each compound score into positive, neutral or negative
+vader_predictions = vader_compound_scores.apply(
+    convert_vader_score_to_label
+)
+
+# Calculate how many VADER predictions match the human labels
+vader_accuracy = accuracy_score(
+    y_test,
+    vader_predictions
+)
+
+# Calculate precision, recall and F1-score for each sentiment
+vader_classification_results = classification_report(
+    y_test,
+    vader_predictions,
+    output_dict=True,
+    zero_division=0
+)
+
+# Convert the results into a DataFrame for the dashboard
+vader_results_df = pd.DataFrame(
+    vader_classification_results
+).transpose()
+
+# Create VADER's confusion matrix
+vader_confusion_matrix = confusion_matrix(
+    y_test,
+    vader_predictions,
+    labels=sentiment_labels
+)
 
 # --- STREAMLIT USER INTERFACE ---
 
@@ -510,10 +581,11 @@ st.pyplot(svm_figure)
 plt.close(svm_figure)
 
 # ---  MODEL COMPARISON ---
-st.subheader("Classifier comparison")
+st.subheader("Sentiment method comparison")
 
-# Extract the macro-average F1-score from each classification report
-# Macro averaging gives every sentiment class equal importance
+
+# Extract the macro F1-score for each method
+# Macro F1 gives equal importance to all three sentiment classes
 logistic_macro_f1 = logistic_classification_results[
     "macro avg"
 ]["f1-score"]
@@ -522,23 +594,44 @@ svm_macro_f1 = svm_classification_results[
     "macro avg"
 ]["f1-score"]
 
-# Create a comparison table
+vader_macro_f1 = vader_classification_results[
+    "macro avg"
+]["f1-score"]
+
+
+# Create a table comparing all three sentiment methods
 model_comparison = pd.DataFrame({
-    "Model": [
+    "Method": [
         "Logistic Regression",
-        "Linear SVM"
+        "Linear SVM",
+        "VADER"
+    ],
+    "Approach": [
+        "Supervised machine learning",
+        "Supervised machine learning",
+        "Rule-based sentiment analysis"
     ],
     "Accuracy": [
         logistic_accuracy,
-        svm_accuracy
+        svm_accuracy,
+        vader_accuracy
     ],
     "Macro F1-score": [
         logistic_macro_f1,
-        svm_macro_f1
+        svm_macro_f1,
+        vader_macro_f1
     ]
 })
 
-# Display the scores as percentages
+
+# Sort the methods from highest to lowest macro F1-score
+model_comparison = model_comparison.sort_values(
+    by="Macro F1-score",
+    ascending=False
+).reset_index(drop=True)
+
+
+# Display accuracy and macro F1-score as percentages
 st.dataframe(
     model_comparison.style.format({
         "Accuracy": "{:.2%}",
@@ -547,14 +640,88 @@ st.dataframe(
     use_container_width=True
 )
 
-# Identify which model achieved the higher accuracy
-if svm_accuracy > logistic_accuracy:
-    best_model = "Linear SVM"
-elif logistic_accuracy > svm_accuracy:
-    best_model = "Logistic Regression"
-else:
-    best_model = "Both models achieved the same accuracy"
+
+# Identify the method with the highest macro F1-score
+best_method = model_comparison.loc[0, "Method"]
 
 st.write(
-    f"**Highest accuracy:** {best_model}"
+    f"**Highest macro F1-score:** {best_method}"
+)
+
+# --- VADER RESULTS ---
+
+st.subheader("VADER sentiment analysis")
+
+# Display VADER's overall accuracy
+st.metric(
+    label="VADER accuracy",
+    value=f"{vader_accuracy:.2%}"
+)
+
+st.write(
+    "VADER is a rule-based sentiment analyser. Unlike Logistic Regression and Linear SVM, it does not learn from this dataset."
+)
+
+# Display VADER's precision, recall and F1-score
+st.subheader("VADER classification report")
+
+st.dataframe(
+    vader_results_df.round(3),
+    use_container_width=True
+)
+
+# Create a figure for the VADER confusion matrix
+vader_figure, vader_axis = plt.subplots(
+    figsize=(7, 5)
+)
+
+# Display the confusion matrix as a heatmap
+sns.heatmap(
+    vader_confusion_matrix,
+
+    # Display the number of predictions in each cell
+    annot=True,
+
+    # Display whole numbers
+    fmt="d",
+
+    # Use a different colour for VADER
+    cmap="Oranges",
+
+    # Use the same label order as the mother models
+    xticklabels=sentiment_labels,
+    yticklabels=sentiment_labels,
+
+    # Draw the heatmap on this axis
+    ax=vader_axis
+)
+
+# Label the chart
+vader_axis.set_xlabel("Predicted sentiment")
+vader_axis.set_ylabel("Actual sentiment")
+vader_axis.set_title("VADER confusion matrix")
+
+# Display and then close the figure
+st.pyplot(vader_figure)
+plt.close(vader_figure)
+
+# Table showing how VADER analysed individual comments
+vader_examples = pd.DataFrame({
+    "Original comment": vader_test_comments,
+    "Compound score": vader_compound_scores,
+    "Actual sentiment": y_test,
+    "VADER prediction": vader_predictions
+})
+
+# Show whether VADER agreed with the human label
+vader_examples["Correct prediction"] = (
+    vader_examples["Actual sentiment"]
+    == vader_examples["VADER prediction"]
+)
+
+st.subheader("Example VADER predictions")
+
+st.dataframe(
+    vader_examples.head(20),
+    use_container_width=True
 )
