@@ -14,6 +14,9 @@ from sklearn.metrics import ( # These tools measure how well the classifier perf
 import matplotlib.pyplot as plt
 import seaborn as sns
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer # VADER provides rule-based sentiment analysis without model training
+from sklearn.cluster import KMeans # KMeans groups comments according to similarities in their text
+from sklearn.metrics import silhouette_score # The silhouette score measures how clearly separateed the clusters are
+from sklearn.decomposition import TruncatedSVD # TruncatedSVD reduces TF-IDF data to two dimensions for visualisation
 
 # Configure the Streamlit browser page
 st.set_page_config(
@@ -339,6 +342,165 @@ vader_confusion_matrix = confusion_matrix(
     vader_predictions,
     labels=sentiment_labels
 )
+
+# --- K-MEANS CLUSTERING ---
+
+# Create a separate TF-IDF vectoriser for clustering
+# This is fitted on all cleaned comments because clustering does not use human sentiment labels or require a train/test split
+clustering_vectorizer = TfidfVectorizer(
+    # Remove common English words
+    stop_words="english",
+
+    # Include individual words and two-word phrases
+    ngram_range=(1, 2),
+
+    # Ignore terms appearing in fewer than two comments
+    min_df=2,
+
+    # Limit the number of features
+    max_features=5000
+)
+
+# Convert every processed comment into TF-IDF features
+clustering_tfidf = clustering_vectorizer.fit_transform(
+    cleaned_data["Processed Comments"]
+)
+
+# Test several possible numbers of clusters
+# Start at 2 because silhouette score cannot be calculated when every comment belongs to one cluster
+possible_cluster_numbers = range(2, 7)
+
+# Store the result produced by each cluster number
+clustering_evaluation = []
+
+for number_of_clusters in possible_cluster_numbers:
+    # Create a temporary K-means model
+    temporary_kmeans = KMeans(
+        n_clusters=number_of_clusters,
+
+        # Use several initial starting positions and retain the best result
+        n_init=10,
+
+        # Make the results reproducible
+        random_state=42
+    )
+
+    # Assign every comment to a temporary cluster
+    temporary_cluster_labels = temporary_kmeans.fit_predict(
+        clustering_tfidf
+    )
+
+    # Inertia measures the distance between commments and their assigned cluster centres. Lower values indiciate tighter clusters.
+    inertia = temporary_kmeans.inertia_
+
+    # Silhouette score measures cluster separation
+    # Values closer to 1 generally indicate clearer clusters
+    silhouette = silhouette_score(
+        clustering_tfidf,
+        temporary_cluster_labels
+    )
+
+    # Store the evaluation results
+    clustering_evaluation.append({
+        "Number of clusters": number_of_clusters,
+        "Inertia": inertia,
+        "Silhouette score": silhouette
+    })
+
+# Convert the evaluation results into a DataFrame
+clustering_evaluation_df = pd.DataFrame(
+    clustering_evaluation
+)
+
+# Select the cluster number with the highest silhouette score
+best_cluster_row = clustering_evaluation_df[
+    "Silhouette score"
+].idxmax()
+
+best_cluster_number = int(
+    clustering_evaluation_df.loc[
+        best_cluster_row,
+        "Number of clusters"
+    ]
+)
+
+# Create the final K-means model using the selected cluster number
+kmeans_model = KMeans(
+    n_clusters=best_cluster_number,
+    n_init=10,
+    random_state=42
+)
+
+# Fit the model and assign a cluster number to every comment
+cleaned_data["Cluster"] = kmeans_model.fit_predict(
+    clustering_tfidf
+)
+
+# Retrieve all words and phrases used by the clustering vectoriser
+clustering_feature_names = (
+    clustering_vectorizer.get_feature_names_out()
+)
+
+# Store the most important terms from each cluster
+cluster_term_results = []
+
+for cluster_number in range(best_cluster_number):
+    # Retrieve the cluster centre
+    cluster_centre = kmeans_model.cluster_centers_[
+        cluster_number
+    ]
+
+    # Find the indexes of the ten terms with the highest values
+    top_term_indexes = cluster_centre.argsort()[-10:][::-1]
+
+    # Convert the indexes back into readable words and phrases
+    top_terms = clustering_feature_names[
+        top_term_indexes
+    ]
+
+    # Store the cluster and its most important terms
+    cluster_term_results.append({
+        "Cluster": cluster_number,
+        "Top terms": ", ".join(top_terms)
+    })
+
+# Convert the cluster terms into a DataFrame
+cluster_terms_df = pd.DataFrame(
+    cluster_term_results
+)
+
+# Count how many comments were assigned to each cluster
+cluster_counts = (
+    cleaned_data["Cluster"]
+    .value_counts()
+    .sort_index()
+    .rename_axis("Cluster")
+    .reset_index(name="Number of comments")
+)
+
+# Compare cluster membership with the human sentiment labels
+# Human labels are used only for interpretation after clustering
+cluster_sentiment_table = pd.crosstab(
+    cleaned_data["Cluster"],
+    cleaned_data["Sentiment"]
+)
+
+cluster_visualiser = TruncatedSVD(
+    n_components=2,
+    random_state=42
+)
+
+# Create two-dimensional coordinates for every comment
+cluster_coordinates = cluster_visualiser.fit_transform(
+    clustering_tfidf
+)
+
+# Store the coordinates and cluster numbers in a DataFrame
+cluster_plot_data = pd.DataFrame({
+    "Dimension 1": cluster_coordinates[:, 0],
+    "Dimension 2": cluster_coordinates[:, 1],
+    "Cluster": cleaned_data["Cluster"].astype(str)
+})
 
 # --- STREAMLIT USER INTERFACE ---
 
@@ -725,3 +887,140 @@ st.dataframe(
     vader_examples.head(20),
     use_container_width=True
 )
+
+# --- K-MEANS CLUSTERING RESULTS ---
+
+st.subheader("K-means comment clustering")
+
+st.write(
+    "K-means groups comments according to similarities in their"
+    "TF-IDF features without using the human sentiment labels."
+)
+
+# Display the selected number of clusters
+st.metric(
+    label="Selected number of clusters",
+    value=best_cluster_number
+)
+
+# Display the evaluation measurements
+st.subheader("Selecting the number of clusters")
+
+st.dataframe(
+    clustering_evaluation_df.round(3),
+    use_container_width=True
+)
+
+st.write(
+    "The final cluster number was selected using the highest "
+    "silhouette score."
+)
+
+# Create two charts beside each other
+evaluation_figure, evaluation_axes = plt.subplots(
+    1,
+    2,
+    figsize=(12, 4)
+)
+
+# Plot inertia for the elbow method
+evaluation_axes[0].plot(
+    clustering_evaluation_df["Number of clusters"],
+    clustering_evaluation_df["Inertia"],
+    marker="o"
+)
+
+evaluation_axes[0].set_xlabel("Number of clusters")
+evaluation_axes[0].set_ylabel("Inertia")
+evaluation_axes[0].set_title("Elbow method")
+
+# Plot the silhouette scores
+evaluation_axes[1].plot(
+    clustering_evaluation_df["Number of clusters"],
+    clustering_evaluation_df["Silhouette score"],
+    marker="o",
+    color="green"
+)
+
+evaluation_axes[1].set_xlabel("Number of clusters")
+evaluation_axes[1].set_ylabel("Silhouette score")
+evaluation_axes[1].set_title("Silhouette scores")
+
+# Improve spacing and display the charts
+evaluation_figure.tight_layout()
+st.pyplot(evaluation_figure)
+plt.close(evaluation_figure)
+
+# Display the number of comments in each cluster
+st.subheader("Cluster sizes")
+
+st.dataframe(
+    cluster_counts,
+    use_container_width=True
+)
+
+# Display the terms that most strongly represent each cluster
+st.subheader("Most important terms in each cluster")
+
+st.dataframe(
+    cluster_terms_df,
+    use_container_width=True
+)
+
+# Create a scatter plot of the comment clusteres
+cluster_figure, cluster_axis = plt.subplots(
+    figsize=(9, 6)
+)
+
+sns.scatterplot(
+    data=cluster_plot_data,
+    x="Dimension 1",
+    y="Dimension 2",
+    hue="Cluster",
+
+    # Use different colours for each cluster
+    palette="tab10",
+
+    # Make the plotted points easier to see
+    alpha=0.7,
+    ax=cluster_axis
+)
+
+cluster_axis.set_title(
+    "Two-dimensional visualisation of comment clusters"
+)
+
+cluster_axis.set_xlabel("Reduced TF-IDF dimension 1")
+cluster_axis.set_ylabel("Reduced TF-IDF dimension 2")
+
+st.pyplot(cluster_figure)
+plt.close(cluster_figure)
+
+st.subheader("Clusters compared with human sentiment")
+
+st.write(
+    "The sentiment labels were not used to create the clusters. "
+    "They are shown here only to help interpret the results."
+)
+
+st.dataframe(
+    cluster_sentiment_table,
+    use_container_width=True
+)
+
+st.subheader("Example comments from each cluster")
+
+for cluster_number in range(best_cluster_number):
+    st.write(f"**Cluster {cluster_number}**")
+
+    # Select up to five coments assigned to the current cluster
+    cluster_examples = cleaned_data[
+        cleaned_data["Cluster"] == cluster_number
+    ][
+        ["Comments", "Sentiment"]
+    ].head(5)
+
+    st.dataframe(
+        cluster_examples,
+        use_container_width=True
+    )
