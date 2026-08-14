@@ -512,6 +512,156 @@ st.write(
     "machine learning to analyse YouTube comments."
 )
 
+# --- LIVE COMMENT ANALYSIS ---
+
+st.subheader("Analyse a new comment")
+
+st.write(
+    "Enter a YouTube comment to compare predictions from Logistic "
+    "Regression, Linear SVM, VADER and K-means clustering."
+)
+
+# Text box where the user can enter a comment
+user_comment = st.text_area(
+    label="YouTube comment",
+    placeholder="For example: I really enjoyed this video!",
+    height=120
+)
+
+# Button that starts the analysis
+analyse_button = st.button(
+    "Analyse comment",
+    type="primary"
+)
+
+# Run this section only when the button is pressed
+if analyse_button:
+    # Remove spaces from the beginning and end of the comment
+    user_comment = user_comment.strip()
+
+    # Prevent the user from submitting an empty comment
+    if user_comment == "":
+        st.warning(
+            "Please enter a comment before selecting Analyse comment."
+        )
+
+    else:
+        # Apply the same preprocessing used on the training comments
+        processed_user_comment = preprocess_text(
+            user_comment
+        )
+
+        # Preprocessing could remove everything if the input only contains punctuation, symbols or emojis
+        if processed_user_comment == "":
+            st.warning(
+                "The coment does not contain enough readable text "
+                "for the machine-learning models to analyse."
+            )
+
+        else:
+            # Convert the processed comment into TF-IDF features transform() is used because the vectoriser has already learned
+            # its vocabulary from the training data
+            user_comment_tfidf = tfidf_vectorizer.transform(
+                [processed_user_comment]
+            )
+
+            # Predict sentiment using Logistic Regression
+            logistic_user_prediction = logistic_model.predict(
+                user_comment_tfidf
+            )[0]
+
+            # Predict sentiment using Linear SVM
+            svm_user_prediction = linear_svm_model.predict(
+                user_comment_tfidf
+            )[0]
+
+            # VADER analyses the original comment because punctuation, capitalisation and emojis may affect its result
+            vader_user_scores = vader_analyzer.polarity_scores(
+                user_comment
+            )
+
+            # Retrieve VADER's overall score from -1 to +1
+            vader_user_compound = vader_user_scores[
+                "compound"
+            ]
+
+            # Convert the numerical VADER score into a sentiment label
+            vader_user_prediction = convert_vader_score_to_label(
+                vader_user_compound
+            )
+
+            # Convert the comment using the clustering vectoriser
+            user_comment_clustering_tfidf = (
+                clustering_vectorizer.transform(
+                    [processed_user_comment]
+                )
+            )
+
+            # Assign the new comment to its closest K-means cluster
+            user_cluster_prediction = kmeans_model.predict(
+                user_comment_clustering_tfidf
+            )[0]
+
+            # --- DISPLAY LIVE RESULTS ---
+
+            st.subheader("Analysis results")
+
+            # Create four areas for the prediction results
+            result_column1, result_column2 = st.columns(2)
+            result_column3, result_column4 = st.columns(2)
+
+            with result_column1:
+                st.metric(
+                    label="Logistic Regression",
+                    value=logistic_user_prediction.title()
+                )
+
+            with result_column3:
+                st.metric(
+                    label="K-means cluster",
+                    value=f"Cluster {user_cluster_prediction}"
+                )
+
+            # Show VADER's numerical compound score
+            st.write(
+                f"**VADER compound score:** "
+                f"{vader_user_compound:.3f}"
+            )
+
+            # Find the most important terms for teh assigned cluster
+            user_cluster_terms = cluster_terms_df.loc[
+                cluster_terms_df["Cluster"]
+                == user_cluster_prediction,
+                "Top terms"
+            ].iloc[0]
+
+            st.write(
+                f"**Important terms in Cluster "
+                f"{user_cluster_prediction}:** "
+                f"{user_cluster_terms}"
+            )
+
+            # Store the three sentiment predictions in a list
+            sentiment_predictions = [
+                logistic_user_prediction,
+                svm_user_prediction,
+                vader_user_prediction
+            ]
+
+            # A set removes duplicate values. If its length is one, all three methods produced the same sentiment
+            if len(set(sentiment_predictions)) == 1:
+                st.success(
+                    "All three sentiment methods agree that this "
+                    f"comment is {logistic_user_prediction}."
+                )
+
+            else:
+                st.info(
+                    "The sentiment methods produced different results. "
+                    "This can happen because the machine-learning models "
+                    "learn from the dataset, while VADER follows "
+                    "predefined language rules."
+                )
 
 # Display a summary of the cleaning process
 st.subheader("Data-cleaning summary")
