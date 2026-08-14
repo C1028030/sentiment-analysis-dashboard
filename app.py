@@ -48,6 +48,24 @@ def load_and_clean_data():
     # For example, " Comment " becomes "Comment"
     cleaned_data.columns = cleaned_data.columns.str.strip()
 
+    # Define the columns required by the application
+    required_columns = {
+        comment_column,
+        label_column
+    }
+
+    # Identify any required columns that are missing
+    missing_columns = required_columns.difference(
+        cleaned_data.columns
+    )
+
+    # Stop the cleaning process with a clear explanation if the dataset does not contain the required columns
+    if missing_columns:
+        raise ValueError(
+            "The dataset is missing these required columns: "
+            + ", ".join(sorted(missing_columns))
+        )
+
     # Remove rows where either the comment or human label is missing
     cleaned_data = cleaned_data.dropna(
         subset=[comment_column, label_column]
@@ -132,8 +150,48 @@ def convert_vader_score_to_label(compound_score):
     else:
         return "neutral"
 
-# Run the function and store both versions of the dataset
-original_data, cleaned_data = load_and_clean_data()
+# Attempt to load and validate the dataset
+try:
+    original_data, cleaned_data = load_and_clean_data()
+
+# Display a clear error instead of a large traceback
+except FileNotFoundError:
+    st.error(
+        "The dataset could not be found. Make sure "
+        "'data/youtube_comments_labels.csv' exists."
+    )
+    st.stop()
+
+except ValueError as error:
+    st.error(
+        f"Dataset validation error: {error}"
+    )
+    st.stop()
+
+except pd.errors.EmptyDataError:
+    st.error(
+        "The dataset exists but does not contain any data."
+    )
+    st.stop()
+
+# Stop the application if no usable comments remain after cleaning
+if cleaned_data.empty:
+    st.error(
+        "No usable comments remain after dataset cleaning."
+    )
+    st.stop()
+
+# Each sentiment must contain at least two comments because stratified train/test splitting needs multiple examples per class
+sentiment_counts = cleaned_data[
+    "Sentiment"
+].value_counts()
+
+if sentiment_counts.min() < 2:
+    st.error(
+        "Each sentiment category must contain at leasty two comments "
+        "for stratified training and testing."
+    )
+    st.stop()
 
 # Apply the NLP preprocessing function to every comment
 # The result is stored in a new column so the originalk text is preserved
@@ -536,7 +594,10 @@ with live_tab:
     user_comment = st.text_area(
         label="YouTube comment",
         placeholder="For example: I really enjoyed this video!",
-        height=120
+        height=120,
+
+        # Prevent excessively long input from affecting performance
+        max_chars=5000
     )
 
     # Button that starts the analysis
@@ -565,7 +626,7 @@ with live_tab:
             # Preprocessing could remove everything if the input only contains punctuation, symbols or emojis
             if processed_user_comment == "":
                 st.warning(
-                    "The coment does not contain enough readable text "
+                    "The comment does not contain enough readable text "
                     "for the machine-learning models to analyse."
                 )
 
@@ -575,6 +636,15 @@ with live_tab:
                 user_comment_tfidf = tfidf_vectorizer.transform(
                     [processed_user_comment]
                 )
+
+                # nnz means "number of non-zero values"
+                # A value of zer omeans none of the comment's terms appeared in the vocabulary learned from the training dataset
+                if user_comment_tfidf.nnz == 0:
+                    st.warning(
+                        "None of the words in this comment appear in the model's "
+                        "training vocabulary. Logistic Regression and Linear SVM "
+                        "predictions may therefore be unreliable."
+                    )
 
                 # Predict sentiment using Logistic Regression
                 logistic_user_prediction = logistic_model.predict(
@@ -651,7 +721,7 @@ with live_tab:
                     f"{vader_user_compound:.3f}"
                 )
 
-                # Find the most important terms for teh assigned cluster
+                # Find the most important terms for the assigned cluster
                 user_cluster_terms = cluster_terms_df.loc[
                     cluster_terms_df["Cluster"]
                     == user_cluster_prediction,
@@ -1074,7 +1144,7 @@ with clustering_tab:
     st.subheader("K-means comment clustering")
 
     st.write(
-        "K-means groups comments according to similarities in their"
+        "K-means groups comments according to similarities in their "
         "TF-IDF features without using the human sentiment labels."
     )
 
