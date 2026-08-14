@@ -17,6 +17,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer # VADER pro
 from sklearn.cluster import KMeans # KMeans groups comments according to similarities in their text
 from sklearn.metrics import silhouette_score # The silhouette score measures how clearly separated the clusters are
 from sklearn.decomposition import TruncatedSVD # TruncatedSVD reduces TF-IDF data to two dimensions for visualisation
+from transformers import pipeline # Pipeline provides a simple interface for pretrained transformer models
 
 # Configure the Streamlit browser page
 st.set_page_config(
@@ -158,6 +159,28 @@ def create_vader_analyser():
     cache_resource is used because the analyser is a reusable object rather than tabular data.
     """
     return SentimentIntensityAnalyzer()
+
+@st.cache_resource
+def create_transformer_analyser():
+    """
+    Downloads and loads the pretrained RoBERTa sentiment model.
+    
+    cache_resource prevents the large model from being reloaded
+    every time Streamlit reruns the application.
+    """
+
+    # This model was trained for sentiment analysis of English social-media text
+    transformer_model_name = (
+        "cardiffnlp/"
+        "twitter-roberta-base-sentiment-latest"
+    )
+
+    # Create and return the sentiment-analysis pipeline
+    return pipeline(
+        task="sentiment-analysis",
+        model=transformer_model_name,
+        tokenizer=transformer_model_name
+    )
 
 # Attempt to load and validate the dataset
 try:
@@ -596,7 +619,8 @@ with live_tab:
 
     st.write(
         "Enter a YouTube comment to compare predictions from Logistic "
-        "Regression, Linear SVM, VADER and K-means clustering."
+        "Regression, Linear SVM, VADER , pretrained RoBERTa and "
+        "K-means clustering."
     )
 
     # Text box where the user can enter a comment
@@ -680,6 +704,49 @@ with live_tab:
                     vader_user_compound
                 )
 
+                # Assume the transformer is available unless loading or prediction produces an error
+                transformer_available = True
+
+                try:
+                    # Display a message during the first model download and load
+                    with st.spinner(
+                        "Loading the pretrained transformer model..."
+                    ):
+                        transformer_analyser = (
+                            create_transformer_analyser()
+                        )
+
+                    # Analyse the original comment with the transformer truncation prevents comments longer than the model's
+                    # maximum token limit from causing an error
+                    transformer_result = transformer_analyser(
+                        user_comment,
+                        truncation=True
+                    )[0]
+
+                    # Retreive and standardise the predicted label
+                    transformer_user_prediction = (
+                        transformer_result["label"]
+                        .strip()
+                        .lower()
+                    )
+
+                    # Retrieve the model's confidence score
+                    transformer_user_confidence = float(
+                        transformer_result["score"]
+                    )
+
+                # Keep the core application working if the transformer cannot load or complete its prediction
+                except Exception:
+                    transformer_available = False
+
+                    transformer_user_prediction = "unavailable"
+                    transformer_user_confidence = None
+
+                    st.warning(
+                        "The pretrained transformer is currently unavailable. "
+                        "The other analysis methods will still be displayed."
+                    )
+
                 # Convert the comment using the clustering vectoriser
                 user_comment_clustering_tfidf = (
                     clustering_vectorizer.transform(
@@ -696,9 +763,10 @@ with live_tab:
 
                 st.subheader("Analysis results")
 
-                # Create four areas for the prediction results
-                result_column1, result_column2 = st.columns(2)
-                result_column3, result_column4 = st.columns(2)
+                # Create five areas for the analysis results
+                result_column1, result_column2, result_column3 = st.columns(3)
+
+                result_column4, result_column5 = st.columns(2)
 
                 with result_column1:
                     st.metric(
@@ -720,6 +788,12 @@ with live_tab:
 
                 with result_column4:
                     st.metric(
+                        label="Pretrained RoBERTa",
+                        value=transformer_user_prediction.title()
+                    )
+
+                with result_column5:
+                    st.metric(
                         label="K-means cluster",
                         value=f"Cluster {user_cluster_prediction}"
                     )
@@ -729,6 +803,13 @@ with live_tab:
                     f"**VADER compound score:** "
                     f"{vader_user_compound:.3f}"
                 )
+
+                # Display confidence only if transformer inference succeeded
+                if transformer_available:
+                    st.write(
+                        f"**RoBERTa confidence:** "
+                        f"{transformer_user_confidence:.2%}"
+                    )
 
                 # Find the most important terms for the assigned cluster
                 user_cluster_terms = cluster_terms_df.loc[
@@ -743,26 +824,32 @@ with live_tab:
                     f"{user_cluster_terms}"
                 )
 
-                # Store the three sentiment predictions in a list
+                # Store the predictions produced by the available sentiment-analysis methods
                 sentiment_predictions = [
                     logistic_user_prediction,
                     svm_user_prediction,
                     vader_user_prediction
                 ]
 
+                # Include RoBERTa only if its prediction succeeded
+                if transformer_available:
+                    sentiment_predictions.append(
+                        transformer_user_prediction
+                    )
+
                 # A set removes duplicate values. If its length is one, all three methods produced the same sentiment
                 if len(set(sentiment_predictions)) == 1:
                     st.success(
-                        "All three sentiment methods agree that this "
+                        "All available sentiment methods agree that this "
                         f"comment is {logistic_user_prediction}."
                     )
 
                 else:
                     st.info(
                         "The sentiment methods produced different results. "
-                        "This can happen because the machine-learning models "
-                        "learn from the dataset, while VADER follows "
-                        "predefined language rules."
+                        "Logistic Regression and Linear SVM learn from this "
+                        "dataset, VADER follows language rules, and RoBERTa "
+                        "uses knowledge learned from large-scale social-media text."
                     )
 
 with data_tab:
