@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer # VADER provides rule-based sentiment analysis without model training
 from sklearn.cluster import KMeans # KMeans groups comments according to similarities in their text
-from sklearn.metrics import silhouette_score # The silhouette score measures how clearly separateed the clusters are
+from sklearn.metrics import silhouette_score # The silhouette score measures how clearly separated the clusters are
 from sklearn.decomposition import TruncatedSVD # TruncatedSVD reduces TF-IDF data to two dimensions for visualisation
 
 # Configure the Streamlit browser page
@@ -150,6 +150,15 @@ def convert_vader_score_to_label(compound_score):
     else:
         return "neutral"
 
+@st.cache_resource
+def create_vader_analyser():
+    """
+    Creates and caches the VADER analyser.
+
+    cache_resource is used because the analyser is a reusable object rather than tabular data.
+    """
+    return SentimentIntensityAnalyzer()
+
 # Attempt to load and validate the dataset
 try:
     original_data, cleaned_data = load_and_clean_data()
@@ -194,7 +203,7 @@ if sentiment_counts.min() < 2:
     st.stop()
 
 # Apply the NLP preprocessing function to every comment
-# The result is stored in a new column so the originalk text is preserved
+# The result is stored in a new column so the original text is preserved
 cleaned_data["Processed Comments"] = cleaned_data["Comments"].apply(
     preprocess_text
 )
@@ -248,10 +257,10 @@ X_test_tfidf = tfidf_vectorizer.transform(X_test)
 
 # Create the logistic regression classification model
 logistic_model = LogisticRegression(
-    # Allow the traning process enough attempts to find a solution
+    # Allow the training process enough attempts to find a solution
     max_iter=1000,
 
-    # Use a fixed value to make the model's rresults reproducible
+    # Use a fixed value to make the model's results reproducible
     random_state=42
 )
 
@@ -299,7 +308,7 @@ logistic_confusion_matrix = confusion_matrix(
 
 # Create the linear support vector machine model
 linear_svm_model = LinearSVC(
-    # Use a fixed value so teh results are reproducible
+    # Use a fixed value so the results are reproducible
     random_state=42,
 
     # Allow enough iterations for the model to complete its training
@@ -340,7 +349,7 @@ svm_results_df = pd.DataFrame(
     svm_classification_results
 ).transpose()
 
-# Create a confusion matrix ffor Linear SVM
+# Create a confusion matrix for Linear SVM
 svm_confusion_matrix = confusion_matrix(
     y_test,
     svm_predictions,
@@ -350,8 +359,8 @@ svm_confusion_matrix = confusion_matrix(
 
 # -- VADER SENTIMENT ANALYSIS ---
 
-# Create the VADER sentiment analyser
-vader_analyzer = SentimentIntensityAnalyzer()
+# Retrieve the cached VADER analyser
+vader_analyzer = create_vader_analyser()
 
 # Retrieve the original versions of the comments in the test set
 # We use the indexes from X_test so VADER is evaluated on exactly the same comments as Logistic Regression and Linear SVM
@@ -448,7 +457,7 @@ for number_of_clusters in possible_cluster_numbers:
         clustering_tfidf
     )
 
-    # Inertia measures the distance between commments and their assigned cluster centres. Lower values indiciate tighter clusters.
+    # Inertia measures the distance between comments and their assigned cluster centres. Lower values indicate tighter clusters.
     inertia = temporary_kmeans.inertia_
 
     # Silhouette score measures cluster separation
@@ -1218,7 +1227,7 @@ with clustering_tab:
         use_container_width=True
     )
 
-    # Create a scatter plot of the comment clusteres
+    # Create a scatter plot of the comment clusters
     cluster_figure, cluster_axis = plt.subplots(
         figsize=(9, 6)
     )
@@ -1264,7 +1273,7 @@ with clustering_tab:
     for cluster_number in range(best_cluster_number):
         st.write(f"**Cluster {cluster_number}**")
 
-        # Select up to five coments assigned to the current cluster
+        # Select up to five comments assigned to the current cluster
         cluster_examples = cleaned_data[
             cleaned_data["Cluster"] == cluster_number
         ][
