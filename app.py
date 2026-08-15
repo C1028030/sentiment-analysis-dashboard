@@ -182,6 +182,61 @@ def create_transformer_analyser():
         tokenizer=transformer_model_name
     )
 
+@st.cache_data(show_spinner=False)
+def evaluate_transformer(test_comments):
+    """
+    Uses the pretrained RoBERTa model to analyse the test comments.
+    The results are cached so the complete test set does not need to be analysed again whenever Streamlit reruns.
+    """
+
+    # Retrieve the transformer cached by cache_resource
+    transformer_analyser = create_transformer_analyser()
+
+    # Analyse comments in batches for better performance
+    transformer_results = transformer_analyser(
+        list(test_comments),
+        truncation=True,
+        max_length=512,
+        batch_size=16
+    )
+
+    # Some transformer models return such as LABEL_0 instead of readable sentiment names
+    label_mapping = {
+        "label_0": "negative",
+        "label_1": "neutral",
+        "label_2": "positive"
+    }
+
+    transformer_predictions = []
+    transformer_confidences = []
+
+    for result in transformer_results:
+        # Standardise the label returned by the model
+        predicted_label = (
+            result["label"]
+            .strip()
+            .lower()
+        )
+
+        # Convert a generic label into a readable sentiment if needed
+        predicted_label = label_mapping.get(
+            predicted_label,
+            predicted_label
+        )
+
+        transformer_predictions.append(
+            predicted_label
+        )
+
+        transformer_confidences.append(
+            float(result["score"])
+        )
+
+    return(
+        transformer_predictions,
+        transformer_confidences
+    )
+
 # Attempt to load and validate the dataset
 try:
     original_data, cleaned_data = load_and_clean_data()
@@ -619,7 +674,7 @@ with live_tab:
 
     st.write(
         "Enter a YouTube comment to compare predictions from Logistic "
-        "Regression, Linear SVM, VADER , pretrained RoBERTa and "
+        "Regression, Linear SVM, VADER, pretrained RoBERTa and "
         "K-means clustering."
     )
 
@@ -671,7 +726,7 @@ with live_tab:
                 )
 
                 # nnz means "number of non-zero values"
-                # A value of zer omeans none of the comment's terms appeared in the vocabulary learned from the training dataset
+                # A value of zero means none of the comment's terms appeared in the vocabulary learned from the training dataset
                 if user_comment_tfidf.nnz == 0:
                     st.warning(
                         "None of the words in this comment appear in the model's "
@@ -720,10 +775,11 @@ with live_tab:
                     # maximum token limit from causing an error
                     transformer_result = transformer_analyser(
                         user_comment,
-                        truncation=True
+                        truncation=True,
+                        max_length=512
                     )[0]
 
-                    # Retreive and standardise the predicted label
+                    # Retrieve and standardise the predicted label
                     transformer_user_prediction = (
                         transformer_result["label"]
                         .strip()
@@ -1085,6 +1141,171 @@ with classifier_tab:
     # Close the figure after displaying it
     plt.close(svm_figure)
 
+    # -- PRETRAINED ROBERTA EVALUATION ---
+    
+    st.subheader("Pretrained RoBERTa evaluation")
+
+    st.write(
+        "RoBERTa can be evaluated against the same human-labelled "
+        "test comments used for Logistic Regression, Linear SVM and VADER."
+    )
+
+    # Remember whether the user requested transformer evaluation
+    if "run_roberta_evaluation" not in st.session_state:
+        st.session_state["run_roberta_evaluation"] = False
+
+    # Start evaluation when the user presses the button
+    if st.button(
+        "Evaluate RoBERTa on test set",
+        type="secondary"
+    ):
+        st.session_state["run_roberta_evaluation"] = True
+
+    # This remains false unless evaluation succeeds
+    roberta_evaluation_available = False
+
+    if st.session_state["run_roberta_evaluation"]:
+        try:
+            with st.spinner(
+                "Evaluationg RoBERTa on the test comments..."
+            ):
+                # Convert the Series to a tuple so its conents can be safelyt used as a cache input
+                (
+                    roberta_predictions,
+                    roberta_confidences
+                ) = evaluate_transformer(
+                    tuple(vader_test_comments.tolist())
+                )
+
+            # Mark the evaluation as successful
+            roberta_evaluation_available = True
+
+            # Calculate RoBERTa's overall accuracy
+            roberta_accuracy = accuracy_score(
+                y_test,
+                roberta_predictions
+            )
+
+            # Calculate precision, recall and F1-score
+            roberta_classification_results = classification_report(
+                y_test,
+                roberta_predictions,
+                output_dict=True,
+                zero_division=0
+            )
+
+            # Convert the report into a DataFrame
+            roberta_results_df = pd.DataFrame(
+                roberta_classification_results
+            ).transpose()
+
+            # Create the RoBERTa confusion matrix
+            roberta_confusion_matrix = confusion_matrix(
+                y_test,
+                roberta_predictions,
+                labels=sentiment_labels
+            )
+
+            # Extract macro F1 for the comparison table
+            roberta_macro_f1 = roberta_classification_results[
+                "macro avg"
+            ]["f1-score"]
+
+            # Calculate the model's average confidence
+            roberta_average_confidence = (
+                sum(roberta_confidences)
+                / len(roberta_confidences)
+            )
+
+            # Display overall accuracy and average confidence
+            roberta_metric1, roberta_metric2 = st.columns(2)
+
+            with roberta_metric1:
+                st.metric(
+                    label="RoBERTa accuracy",
+                    value=f"{roberta_accuracy:.2%}"
+                )
+
+            with roberta_metric2:
+                st.metric(
+                    label="Average confidence",
+                    value=f"{roberta_average_confidence:.2%}"
+                )
+
+            st.caption(
+                "Confidence shows how strongly RoBERTa preferred its "
+                "selected label. It does not prove that the prediction "
+                "was correct."
+            )
+
+            # Display the detailed performance report
+            st.subheader("RoBERTa classification report")
+
+            st.dataframe(
+                roberta_results_df.round(3),
+                use_container_width=True
+            )
+
+            # Create a figure for the RoBERTa confusion matrix
+            roberta_figure, roberta_axis = plt.subplots(
+                figsize=(7, 5)
+            )
+
+            sns.heatmap(
+                roberta_confusion_matrix,
+                annot=True,
+                fmt="d",
+                cmap="Purples",
+                xticklabels=sentiment_labels,
+                yticklabels=sentiment_labels,
+                ax=roberta_axis
+            )
+
+            roberta_axis.set_xlabel("Predicted sentiment")
+            roberta_axis.set_ylabel("Actual sentiment")
+            roberta_axis.set_title(
+                "Pretrained RoBERTa confusion matrix"
+            )
+
+            st.pyplot(roberta_figure)
+            plt.close(roberta_figure)
+
+            # Table showing individual transformer predictions
+            roberta_examples = pd.DataFrame({
+                "Original comment": vader_test_comments.tolist(),
+                "Actual sentiment": y_test.tolist(),
+                "RoBERTa prediction": roberta_predictions,
+                "Confidence": roberta_confidences
+            })
+
+            # Show whether each prediction matches the human label
+            roberta_examples["Correct prediction"] = (
+                roberta_examples["Actual sentiment"]
+                == roberta_examples["RoBERTa prediction"]
+            )
+
+            # Display confidence as a percentage string
+            roberta_examples["Confidence"] = (
+                roberta_examples["Confidence"]
+                .map(lambda score: f"{score:.2%}")
+            )
+
+            st.subheader("Example RoBERTa predictions")
+
+            st.dataframe(
+                roberta_examples.head(20),
+                use_container_width=True
+            )
+
+        except Exception as error:
+            roberta_evaluation_available = False
+
+            st.warning(
+                "RoBERTa evaluation could not be completed. "
+                "The other model results remain available."
+            )
+
+
     # ---  MODEL COMPARISON ---
     st.subheader("Sentiment method comparison")
 
@@ -1104,28 +1325,55 @@ with classifier_tab:
     ]["f1-score"]
 
 
-    # Create a table comparing all three sentiment methods
+    # Begin with the three methods that are always available
+    comparison_methods = [
+        "Logistic Regression",
+        "Linear SVM",
+        "VADER"
+    ]
+
+    comparison_approaches = [
+        "Supervised machine learning",
+        "Supervised machine learning",
+        "Rule-based sentiment analysis"
+    ]
+
+    comparison_accuracies = [
+        logistic_accuracy,
+        svm_accuracy,
+        vader_accuracy
+    ]
+
+    comparison_macro_f1_scores = [
+        logistic_macro_f1,
+        svm_macro_f1,
+        vader_macro_f1
+    ]
+
+    # Add RoBERTa only when its test-set evaluation succeeded
+    if roberta_evaluation_available:
+        comparison_methods.append(
+            "Pretrained RoBERTa"
+        )
+
+        comparison_approaches.append(
+            "Pretrained transformer"
+        )
+
+        comparison_accuracies.append(
+            roberta_accuracy
+        )
+
+        comparison_macro_f1_scores.append(
+            roberta_macro_f1
+        )
+
+    # Create the complete comparison table
     model_comparison = pd.DataFrame({
-        "Method": [
-            "Logistic Regression",
-            "Linear SVM",
-            "VADER"
-        ],
-        "Approach": [
-            "Supervised machine learning",
-            "Supervised machine learning",
-            "Rule-based sentiment analysis"
-        ],
-        "Accuracy": [
-            logistic_accuracy,
-            svm_accuracy,
-            vader_accuracy
-        ],
-        "Macro F1-score": [
-            logistic_macro_f1,
-            svm_macro_f1,
-            vader_macro_f1
-        ]
+        "Method": comparison_methods,
+        "Approach": comparison_approaches,
+        "Accuracy": comparison_accuracies,
+        "Macro F1-score": comparison_macro_f1_scores
     })
 
 
