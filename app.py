@@ -232,7 +232,7 @@ def evaluate_transformer(test_comments):
             float(result["score"])
         )
 
-    return(
+    return (
         transformer_predictions,
         transformer_confidences
     )
@@ -268,15 +268,37 @@ if cleaned_data.empty:
     )
     st.stop()
 
+# Confirm that all three expected sentiment classes are present
+expected_sentiments = {
+    "negative",
+    "neutral",
+    "positive"
+}
+
+available_sentiments = set(
+    cleaned_data["Sentiment"].unique()
+)
+
+missing_sentiments = expected_sentiments.difference(
+    available_sentiments
+)
+
+if missing_sentiments:
+    st.error(
+        "The cleaned dataset is missing these sentiment categories: "
+        + ", ".join(sorted(missing_sentiments))
+    )
+    st.stop()
+
 # Each sentiment must contain at least two comments because stratified train/test splitting needs multiple examples per class
 sentiment_counts = cleaned_data[
     "Sentiment"
 ].value_counts()
 
-if sentiment_counts.min() < 2:
+if sentiment_counts.min() < 5:
     st.error(
-        "Each sentiment category must contain at leasty two comments "
-        "for stratified training and testing."
+        "Each sentiment category must contain at leasty five comments "
+        "for the stratified 80/20 training and testing split."
     )
     st.stop()
 
@@ -320,7 +342,7 @@ tfidf_vectorizer = TfidfVectorizer(
     # Include individual words and pairs of consecutive words. For example: "good" and "very good"
     ngram_range=(1, 2),
 
-    # Ignore words that appear in fewer that two comments
+    # Ignore words that appear in fewer than two comments
     min_df=2,
 
     # Limit the number of features to keep the baseline manageable
@@ -1167,9 +1189,9 @@ with classifier_tab:
     if st.session_state["run_roberta_evaluation"]:
         try:
             with st.spinner(
-                "Evaluationg RoBERTa on the test comments..."
+                "Evaluating RoBERTa on the test comments..."
             ):
-                # Convert the Series to a tuple so its conents can be safelyt used as a cache input
+                # Convert the Series to a tuple so its contents can be safely used as a cache input
                 (
                     roberta_predictions,
                     roberta_confidences
@@ -1297,7 +1319,7 @@ with classifier_tab:
                 use_container_width=True
             )
 
-        except Exception as error:
+        except Exception:
             roberta_evaluation_available = False
 
             st.warning(
